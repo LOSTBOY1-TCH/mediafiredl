@@ -14,15 +14,20 @@ function isValidMediafireURL(url) {
 }
 
 app.post("/download", async (req, res) => {
-  // Changed to POST
-  const { url: fileUrl, stream: streamFile } = req.body // Get from request body
+  const { url: fileUrl, stream: streamFile } = req.body
 
   if (!fileUrl || !isValidMediafireURL(fileUrl)) {
     return res.status(400).json({ error: "Invalid or missing MediaFire URL." })
   }
 
   try {
-    const response = await axios.get(fileUrl)
+    // Added User-Agent header to mimic a browser
+    const response = await axios.get(fileUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+      },
+    })
     const $ = cheerio.load(response.data)
     let directLink = $("a#downloadButton").attr("href")
 
@@ -50,6 +55,10 @@ app.post("/download", async (req, res) => {
         url: directLink,
         method: "GET",
         responseType: "stream",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+        },
       })
 
       const filename = decodeURIComponent(directLink.split("/").pop().split("?")[0])
