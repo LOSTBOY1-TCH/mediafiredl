@@ -19,10 +19,13 @@ function isValidMediafireURL(url) {
 async function extractDirectLink(fileUrl) {
   let browser;
   try {
+    const executablePath = await chromium.executablePath;
+    console.log("Chromium Executable Path:", executablePath); // Add this line for debugging
+
     browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath,
+      executablePath: executablePath,
       headless: chromium.headless,
       ignoreHTTPSErrors: true,
     });
