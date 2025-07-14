@@ -2,6 +2,8 @@ const express = require("express")
 const axios = require("axios")
 const cheerio = require("cheerio")
 const cors = require("cors")
+const chromium = require('@sparticuz/chromium');
+const puppeteer = require('puppeteer-core');
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -15,50 +17,73 @@ function isValidMediafireURL(url) {
 
 // Helper function to extract the direct link
 async function extractDirectLink(fileUrl) {
+  let browser;
   try {
-    const response = await axios.get(fileUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-      },
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath,
+      headless: chromium.headless,
+      ignoreHTTPSErrors: true,
     });
-    const $ = cheerio.load(response.data);
-    let directLink = $("a#downloadButton").attr("href");
+    const page = await browser.newPage();
+    await page.goto(fileUrl, { waitUntil: 'domcontentloaded' }); // Wait for the DOM to be loaded
 
-    // If href is empty or javascript:void(0), try data-scrambled-url
-    if (!directLink || directLink.startsWith("javascript:")) {
-      const scrambledUrl = $("a#downloadButton").data("scrambled-url");
-      if (scrambledUrl) {
-        try {
-          directLink = Buffer.from(scrambledUrl, 'base64').toString('utf8');
-        } catch (decodeError) {
-          console.warn("Failed to decode data-scrambled-url:", decodeError);
-          directLink = null; // Reset directLink if decoding fails
+    // Wait for the download button to appear with a non-javascript href or data-scrambled-url
+    await page.waitForFunction(
+      () => {
+        const downloadButton = document.querySelector('a#downloadButton');
+        if (downloadButton) {
+          const href = downloadButton.getAttribute('href');
+          const scrambledUrl = downloadButton.getAttribute('data-scrambled-url');
+          return (href && !href.startsWith('javascript:')) || scrambledUrl;
         }
+        return false;
+      },
+      { timeout: 30000 } // Wait up to 30 seconds for the button
+    );
+
+    const directLink = await page.evaluate(() => {
+      const downloadButton = document.querySelector('a#downloadButton');
+      if (downloadButton) {
+        let link = downloadButton.getAttribute('href');
+        const scrambledUrl = downloadButton.getAttribute('data-scrambled-url');
+
+        if (scrambledUrl) {
+          try {
+            // Base64 decoding in browser context
+            link = atob(scrambledUrl);
+          } catch (e) {
+            console.error("Failed to decode data-scrambled-url in browser context:", e);
+          }
+        }
+
+        // Fallback to script content if link is still javascript: or empty
+        if (!link || link.startsWith('javascript:')) {
+          const scriptContent = document.body.innerText; // Get all text content
+          const match = scriptContent.match(/"downloadUrl":"(https?:\/\/[^"]+)"/);
+          if (match && match[1]) {
+            link = match[1].replace(/\\u002d/g, "-");
+          }
+        }
+
+        return link;
       }
-    }
+      return null;
+    });
 
-    // Fallback if primary and scrambled methods don't yield a valid direct link
-    if (!directLink || directLink.startsWith("javascript:")) {
-      const scriptContent = $("script").text();
-      const match = scriptContent.match(/"downloadUrl":"(https?:\/\/[^"]+)"/);
-      if (match && match[1]) {
-        directLink = match[1].replace(/\\u002d/g, "-");
-      }
-    }
-
-    if (!directLink || directLink.startsWith("javascript:")) {
-      return null; // No direct link found after all attempts
-    }
-
-    if (!/^https?:\/\//.test(directLink)) {
-      return null; // Not a valid URL format
+    if (!directLink || directLink.startsWith("javascript:") || !/^https?:\/\//.test(directLink)) {
+      return null; // No valid direct link found after all attempts
     }
 
     return directLink;
   } catch (err) {
-    console.error("Error in extractDirectLink:", err);
+    console.error("Error in extractDirectLink with Puppeteer:", err);
     throw err; // Re-throw to be handled by the calling endpoint
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
